@@ -145,13 +145,13 @@ To learn more about the technologies used in this project:
 - [Firebase](https://firebase.google.com/docs) - Firebase documentation
 
 ## 🤝 Contributus
--[Ujjawal Jadav](https://github.com/UJJAWAL8830) -> [Follow](https://www.linkedin.com/in/ujjawal-jadav-31b832272)
--[Krishiv Vyas](https://github.com/krishivvyas) -> [Follow](https://www.linkedin.com/in/krishiv-vyas-07b626289/)
--[Hetarth Bhatt](https://github.com/hetarthbhatt07) -> [Follow](https://www.linkedin.com/in/hetarthbhatt)
--[Anshul Rathod](https://github.com/AXG-Kingsman) -> [Follow](https://www.linkedin.com/in/anshul-rathod-295060333)
--[Punit Devaliya](https://github.com/devaliyapunit2008) -> [Follow](https://www.linkedin.com/in/punit-devaliya-477987327)
--[Meet Laungani](https://github.com/Meet-145) -> [Follow](https://www.linkedin.com/in/meet-laungani-244660180/)
--[Bhavya Takhtani](https://github.com/cosmos24-afk) -> [Follow](https://www.linkedin.com/in/bhavya-takhtani-16a1b1383)
+- [Ujjawal Jadav](https://github.com/UJJAWAL8830) -> [Follow](https://www.linkedin.com/in/ujjawal-jadav-31b832272)
+- [Krishiv Vyas](https://github.com/krishivvyas) -> [Follow](https://www.linkedin.com/in/krishiv-vyas-07b626289/)
+- [Hetarth Bhatt](https://github.com/hetarthbhatt07) -> [Follow](https://www.linkedin.com/in/hetarthbhatt)
+- [Anshul Rathod](https://github.com/AXG-Kingsman) -> [Follow](https://www.linkedin.com/in/anshul-rathod-295060333)
+- [Punit Devaliya](https://github.com/devaliyapunit2008) -> [Follow](https://www.linkedin.com/in/punit-devaliya-477987327)
+- [Meet Laungani](https://github.com/Meet-145) -> [Follow](https://www.linkedin.com/in/meet-laungani-244660180/)
+- [Bhavya Takhtani](https://github.com/cosmos24-afk) -> [Follow](https://www.linkedin.com/in/bhavya-takhtani-16a1b1383)
 
 ## 🙏 Acknowledgments
 
