@@ -3,26 +3,22 @@
 import { useState, useEffect } from "react";
 import { auth, db } from "@/lib/firebase";
 import { onAuthStateChanged, User, signOut } from "firebase/auth";
-import { collection, query, onSnapshot, addDoc, orderBy, Timestamp } from "firebase/firestore";
+import { collection, query, onSnapshot, orderBy, Timestamp, doc, getDoc, updateDoc } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Terminal, Send, LogOut, Code, FileText, PlayCircle, Cpu, Users, ChevronDown, Plus } from "lucide-react";
+import { Terminal, Send, LogOut, Cpu, Users, Plus, Shield, Zap, Target } from "lucide-react";
 import MermaidChart from "@/components/MermaidChart";
-import { getUserTeams, Team } from "@/lib/teams";
+import { getUserTeams, Team, getTeamMembers, TeamMember, addMemberToTeam, createTeam } from "@/lib/teams";
 import TeamModal from "@/components/TeamModal";
+import LiveFeed from "@/components/LiveFeed";
+import OperativeModal from "@/components/OperativeModal";
 
-// Type definition for Project (as defined in Phase A)
+// Type definition for Project
 interface Project {
     id: string;
     inputContext: string;
     status: "generating" | "completed" | "error";
-    output?: {
-        story: string | { problem: string; solution: string; tech: string }; // 3-paragraph pitch
-        diagram: string; // Mermaid string
-        game_quests: { title: string; instruction: string; xp: number }[];
-        demo_script: { time: string; action: string; script: string }[];
-        cheat_sheet: { problem_summary: string; tech_stack_array: string[]; innovation_score: number };
-    };
+    output?: any;
     createdAt: any;
 }
 
@@ -30,11 +26,19 @@ export default function Dashboard() {
     const [user, setUser] = useState<User | null>(null);
     const [teams, setTeams] = useState<Team[]>([]);
     const [currentTeam, setCurrentTeam] = useState<Team | null>(null);
-    const [isTeamModalOpen, setIsTeamModalOpen] = useState(false);
+    const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
 
+    // UI States
+    const [isTeamModalOpen, setIsTeamModalOpen] = useState(false);
     const [inputContext, setInputContext] = useState("");
     const [projects, setProjects] = useState<Project[]>([]);
     const [loading, setLoading] = useState(true);
+    const [addMemberId, setAddMemberId] = useState("");
+    const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
+
+    // Operative Modal State
+    const [selectedMember, setSelectedMember] = useState<TeamMember | null>(null);
+
     const router = useRouter();
 
     useEffect(() => {
@@ -43,37 +47,46 @@ export default function Dashboard() {
                 router.push("/");
             } else {
                 setUser(currentUser);
-
-                // Fetch User's Teams
                 const userTeams = await getUserTeams(currentUser.uid);
                 setTeams(userTeams);
+
+                if (userTeams.length > 0) {
+                    setCurrentTeam(userTeams[0]);
+                } else {
+                    setLoading(false); // No teams yet
+                }
             }
         });
-
         return () => unsubscribe();
     }, [router]);
 
-    // Listener for Projects (User or Team)
+    // Fetch Members when Team Changes
     useEffect(() => {
-        if (!user) return;
+        if (!currentTeam) return;
 
-        setLoading(true);
-        let q;
+        const fetchMembers = async () => {
+            const members = await getTeamMembers(currentTeam.members);
+            setTeamMembers(members);
+        };
 
-        if (currentTeam) {
-            // Listen to TEAM projects
-            q = query(
-                collection(db, "teams", currentTeam.id, "projects"),
-                orderBy("createdAt", "desc")
-            );
-        } else {
-            // Listen to PERSONAL projects
-            q = query(
-                collection(db, "users", user.uid, "projects"),
-                orderBy("createdAt", "desc")
-            );
-        }
+        fetchMembers();
 
+        // Listener for Team Updates (e.g. name change, new members)
+        const unsubTeam = onSnapshot(doc(db, "teams", currentTeam.id), (doc) => {
+            if (doc.exists()) {
+                const updatedTeam = { id: doc.id, ...doc.data() } as Team;
+                // If members changed, refetch details
+                if (updatedTeam.members.length !== currentTeam.members.length) {
+                    getTeamMembers(updatedTeam.members).then(setTeamMembers);
+                }
+            }
+        });
+
+        // Listener for Projects
+        const q = query(
+            collection(db, "teams", currentTeam.id, "projects"),
+            orderBy("createdAt", "desc")
+        );
         const unsubProjects = onSnapshot(q, (snapshot) => {
             const projs = snapshot.docs.map((doc) => ({
                 id: doc.id,
@@ -83,38 +96,50 @@ export default function Dashboard() {
             setLoading(false);
         });
 
-        return () => unsubProjects();
-    }, [user, currentTeam]);
+        return () => {
+            unsubTeam();
+            unsubProjects();
+        };
 
-    const handleTeamJoined = async () => {
+    }, [currentTeam]);
+
+    const handleTeamCreated = async () => {
         if (user) {
             const userTeams = await getUserTeams(user.uid);
             setTeams(userTeams);
+            // Select the new team (last one)
+            if (userTeams.length > 0) setCurrentTeam(userTeams[userTeams.length - 1]);
+        }
+    };
+
+    const handleAddMember = async () => {
+        if (!currentTeam || !user || !addMemberId.trim()) return;
+        try {
+            await addMemberToTeam(currentTeam.id, addMemberId, user.displayName || "Admin");
+            setAddMemberId("");
+            setIsAddMemberOpen(false);
+            alert("Operative added to the roster.");
+        } catch (e) {
+            console.error(e);
+            alert("Failed to add member. Check ID.");
         }
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!inputContext.trim() || !user) return;
+        if (!inputContext.trim() || !user || !currentTeam) return;
 
         try {
-            // Optimistic UI or wait for real-time update?
-            // Step A: Call API to start process
             const response = await fetch("/api/generate", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     userId: user.uid,
                     userContext: inputContext,
-                    teamId: currentTeam?.id // Optional: if present, generate in team
+                    teamId: currentTeam.id
                 }),
             });
-
-            if (!response.ok) {
-                // Handle error (maybe toast)
-                console.error("API Error");
-            }
-
+            if (!response.ok) throw new Error("API Failure");
             setInputContext("");
         } catch (error) {
             console.error("Submission Error", error);
@@ -126,209 +151,226 @@ export default function Dashboard() {
         router.push("/");
     };
 
-    if (loading) return <div className="min-h-screen bg-background flex items-center justify-center text-primary font-mono animate-pulse">CONNECTING_TO_MAINFRAME...</div>;
+    if (loading && !currentTeam && teams.length > 0) return <div className="min-h-screen bg-black flex items-center justify-center text-primary font-mono">INITIALIZING_WAR_ROOM...</div>;
 
     return (
-        <div className="min-h-screen bg-background text-foreground font-mono p-6">
-            <nav className="flex justify-between items-center mb-12 border-b border-primary/20 pb-4">
-                <div className="flex items-center space-x-2 text-primary">
-                    <Terminal className="w-6 h-6" />
-                    <span className="font-bold tracking-widest hidden md:block">DevStory_DASHBOARD</span>
+        <div className="min-h-screen bg-background text-foreground font-mono flex flex-col md:flex-row h-screen overflow-hidden">
+
+            {/* LEFT SIDEBAR navigation (Minimal) */}
+            <div className="w-[60px] md:w-[80px] border-r border-white/10 bg-black flex flex-col items-center py-6 space-y-6 z-20">
+                <div className="p-2 border border-primary/50 rounded bg-primary/10">
+                    <Terminal className="w-6 h-6 text-primary" />
                 </div>
 
-                {/* Team Switcher */}
-                <div className="flex items-center space-x-4 bg-card/30 border border-primary/20 rounded-full px-4 py-2">
-                    <button
-                        onClick={() => setCurrentTeam(null)}
-                        className={`text-sm flex items-center space-x-2 transition-colors ${!currentTeam ? "text-primary font-bold" : "text-muted-foreground hover:text-white"}`}
-                    >
-                        <Users className="w-4 h-4" />
-                        <span>PERSONAL</span>
-                    </button>
-                    <div className="h-4 w-px bg-white/20"></div>
-                    {teams.map(team => (
+                {/* Team Switcher Icons */}
+                <div className="flex-1 space-y-4 w-full flex flex-col items-center">
+                    {teams.map(t => (
                         <button
-                            key={team.id}
-                            onClick={() => setCurrentTeam(team)}
-                            className={`text-sm flex items-center space-x-2 transition-colors ${currentTeam?.id === team.id ? "text-secondary font-bold" : "text-muted-foreground hover:text-white"}`}
+                            key={t.id}
+                            onClick={() => setCurrentTeam(t)}
+                            className={`w-10 h-10 rounded-full border flex items-center justify-center transition-all ${currentTeam?.id === t.id ? 'border-primary bg-primary/20 text-white shadow-[0_0_10px_rgba(57,255,20,0.5)]' : 'border-white/20 text-muted-foreground hover:border-white/50'}`}
+                            title={t.name}
                         >
-                            <span>{team.name}</span>
+                            {t.name.substring(0, 2).toUpperCase()}
                         </button>
                     ))}
-                    <button onClick={() => setIsTeamModalOpen(true)} className="text-muted-foreground hover:text-primary">
-                        <Plus className="w-4 h-4" />
+                    <button onClick={() => setIsTeamModalOpen(true)} className="w-10 h-10 rounded-full border border-dashed border-white/30 text-white/50 hover:text-primary hover:border-primary flex items-center justify-center">
+                        <Plus className="w-5 h-5" />
                     </button>
                 </div>
 
-                <div className="flex items-center space-x-4">
-                    <span className="text-sm text-muted-foreground hidden md:block">User: {user?.displayName}</span>
-                    <button onClick={handleLogout} className="hover:text-primary transition-colors">
-                        <LogOut className="w-5 h-5" />
-                    </button>
-                </div>
-            </nav>
+                <button onClick={handleLogout} className="text-muted-foreground hover:text-red-500">
+                    <LogOut className="w-5 h-5" />
+                </button>
+            </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                {/* Input Console */}
-                <div className="lg:col-span-4 space-y-6">
-                    <div className="border border-primary/50 bg-card/50 p-6 rounded-lg shadow-[0_0_15px_rgba(57,255,20,0.1)]">
-                        <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
-                            <Cpu className="w-5 h-5 mr-2" /> INPUT_VECTOR
-                        </h2>
-                        <form onSubmit={handleSubmit} className="space-y-4">
-                            <div>
-                                <label className="block text-xs uppercase text-muted-foreground mb-1">Idea</label>
+            {/* MAIN CONTENT AREA */}
+            <div className="flex-1 flex flex-col relative overflow-hidden">
+                {/* GRID BACKGROUND */}
+                <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(to_right,#80808008_1px,transparent_1px),linear-gradient(to_bottom,#80808008_1px,transparent_1px)] bg-[size:24px_24px]"></div>
+
+                {/* TEAM HEADER */}
+                <header className="h-16 border-b border-white/10 flex items-center justify-between px-6 bg-black/40 backdrop-blur-sm z-10">
+                    <div className="flex items-center space-x-4">
+                        <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                            <Shield className="w-5 h-5 text-primary" />
+                            {currentTeam ? currentTeam.name : "NO_SQUAD_SELECTED"}
+                        </h1>
+                        <span className="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                            OP_STATUS: ACTIVE
+                        </span>
+                    </div>
+
+                    <div className="flex items-center space-x-6">
+                        {/* ROSTER */}
+                        <div className="flex -space-x-2 items-center">
+                            {teamMembers.map((m) => (
+                                <button
+                                    key={m.uid}
+                                    onClick={() => setSelectedMember(m)}
+                                    className="w-8 h-8 rounded-full border border-black bg-neutral-800 flex items-center justify-center overflow-hidden relative group cursor-pointer hover:scale-110 transition-transform hover:z-10 hover:border-primary focus:outline-none"
+                                    title={m.displayName}
+                                >
+                                    {m.photoURL ? (
+                                        <img src={m.photoURL} alt={m.displayName} className="w-full h-full object-cover" />
+                                    ) : (
+                                        <span className="text-xs font-bold text-white">{m.displayName.substring(0, 1)}</span>
+                                    )}
+                                </button>
+                            ))}
+                            <button
+                                onClick={() => setIsAddMemberOpen(!isAddMemberOpen)}
+                                className="w-8 h-8 rounded-full border border-dashed border-white/30 bg-black flex items-center justify-center hover:border-primary hover:text-primary transition-colors"
+                            >
+                                <Plus className="w-4 h-4" />
+                            </button>
+                        </div>
+
+                        {/* Add Member Popover Input (Quick Hack UI) */}
+                        {isAddMemberOpen && (
+                            <div className="absolute top-16 right-20 bg-black border border-primary/30 p-4 rounded shadow-xl flex gap-2 animate-in fade-in slide-in-from-top-2 z-30">
+                                <input
+                                    value={addMemberId}
+                                    onChange={(e) => setAddMemberId(e.target.value)}
+                                    placeholder="Operative ID..."
+                                    className="bg-neutral-900 border border-white/20 rounded px-2 py-1 text-sm text-white focus:border-primary"
+                                />
+                                <button onClick={handleAddMember} className="bg-primary text-black px-3 py-1 rounded text-xs font-bold hover:bg-white">
+                                    ADD
+                                </button>
+                            </div>
+                        )}
+
+                        <div className="text-right hidden md:block">
+                            <div className="text-xs text-muted-foreground uppercase">Commander</div>
+                            <div className="text-sm font-bold text-white">{user?.displayName || "Unknown"}</div>
+                        </div>
+                    </div>
+                </header>
+
+                {/* WORKSPACE CONTENT */}
+                <div className="flex-1 overflow-y-auto p-6 md:p-8 space-y-8 relative">
+                    {/* INPUT SECTION */}
+                    <section className="max-w-4xl mx-auto">
+                        <div className="flex items-center justify-between mb-4">
+                            <h2 className="text-lg font-bold text-primary flex items-center gap-2">
+                                <Target className="w-5 h-5" /> MISSION_PARAMETERS
+                            </h2>
+                        </div>
+                        <form onSubmit={handleSubmit} className="relative group">
+                            <div className="absolute -inset-0.5 bg-gradient-to-r from-primary to-blue-600 rounded-lg blur opacity-20 group-hover:opacity-50 transition duration-1000 group-hover:duration-200"></div>
+                            <div className="relative">
                                 <textarea
                                     value={inputContext}
                                     onChange={(e) => setInputContext(e.target.value)}
-                                    className="w-full bg-black/50 border border-primary/30 rounded p-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all h-32"
-                                    placeholder="'An app that uses AI to...'"
+                                    className="w-full bg-black border border-white/10 rounded-lg p-4 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all min-h-[100px] resize-y"
+                                    placeholder="Describe the mission objective or GitHub repository to analyze..."
                                 />
+                                <button
+                                    type="submit"
+                                    className="absolute bottom-4 right-4 bg-primary/10 border border-primary text-primary px-4 py-2 rounded text-xs font-bold hover:bg-primary hover:text-black transition-all flex items-center gap-2"
+                                >
+                                    <Send className="w-3 h-3" />
+                                    <span>EXECUTE</span>
+                                </button>
                             </div>
-                            <button
-                                type="submit"
-                                className="w-full bg-primary/10 border border-primary text-primary py-3 font-bold hover:bg-primary hover:text-black transition-all flex items-center justify-center space-x-2"
-                            >
-                                <Send className="w-4 h-4" />
-                                <span>EXECUTE_PROTOCOL</span>
-                            </button>
                         </form>
-                    </div>
-                </div>
+                    </section>
 
-                {/* Live Workshop */}
-                <div className="lg:col-span-8 space-y-6">
-                    <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
-                        <Terminal className="w-5 h-5 mr-2" />
-                        {currentTeam ? `TEAM_OUTPUT_STREAM [${currentTeam.name}]` : "PERSONAL_OUTPUT_STREAM"}
-                    </h2>
-
-                    <div className="space-y-6">
+                    {/* PROJECTS GRID */}
+                    <div className="max-w-6xl mx-auto space-y-6">
                         <AnimatePresence>
                             {projects.map((project) => (
                                 <motion.div
                                     key={project.id}
-                                    initial={{ opacity: 0, x: -20 }}
-                                    animate={{ opacity: 1, x: 0 }}
-                                    exit={{ opacity: 0, height: 0 }}
-                                    className="border border-border bg-card/30 rounded-lg overflow-hidden"
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    className="border border-white/10 bg-black/40 rounded-xl overflow-hidden shadow-2xl backdrop-blur-sm"
                                 >
-                                    <div className="bg-primary/5 p-3 border-b border-primary/10 flex justify-between items-center">
-                                        <span className="text-xs uppercase text-muted-foreground truncate max-w-[200px]">{project.inputContext}</span>
-                                        <span className={`text-xs px-2 py-1 rounded border ${project.status === "completed" ? "border-primary text-primary" :
-                                            project.status === "error" ? "border-destructive text-destructive" :
-                                                "border-yellow-500 text-yellow-500 animate-pulse"
+                                    {/* Project Header */}
+                                    <div className="bg-white/5 px-4 py-2 flex justify-between items-center border-b border-white/5">
+                                        <div className="flex items-center gap-3">
+                                            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                                            <span className="font-mono text-xs text-muted-foreground uppercase">{project.id.slice(0, 8)}...</span>
+                                        </div>
+                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${project.status === "completed" ? "border-primary text-primary" : "border-yellow-500 text-yellow-500"
                                             }`}>
                                             {project.status.toUpperCase()}
                                         </span>
                                     </div>
 
+                                    {/* Project Content */}
                                     {project.status === "completed" && project.output && (
-                                        <div className="p-6 space-y-8">
-                                            {/* Story */}
-                                            <section>
-                                                <h3 className="text-lg font-bold text-secondary mb-2 flex items-center"><FileText className="w-4 h-4 mr-2" /> STORY_PITCH</h3>
-                                                <div className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed border-l-2 border-secondary pl-4">
-                                                    {typeof project.output.story === 'string' ? project.output.story : (
-                                                        <div className="space-y-4">
-                                                            <div>
-                                                                <strong className="text-primary block mb-1">PROBLEM:</strong>
-                                                                {project.output.story.problem}
-                                                            </div>
-                                                            <div>
-                                                                <strong className="text-primary block mb-1">SOLUTION:</strong>
-                                                                {project.output.story.solution}
-                                                            </div>
-                                                            <div>
-                                                                <strong className="text-primary block mb-1">TECH:</strong>
-                                                                {project.output.story.tech}
-                                                            </div>
-                                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-px bg-white/10">
+                                            {/* Story Card */}
+                                            <div className="bg-black/90 p-6 space-y-4">
+                                                <h3 className="text-secondary font-bold flex items-center gap-2"><Zap className="w-4 h-4" /> THE_PITCH</h3>
+                                                <div className="text-xs leading-relaxed text-muted-foreground/80 space-y-2">
+                                                    {typeof project.output.story === "string" ? project.output.story : (
+                                                        <>
+                                                            <p><strong className="text-white">PROBLEM:</strong> {project.output.story.problem}</p>
+                                                            <p><strong className="text-white">SOLUTION:</strong> {project.output.story.solution}</p>
+                                                            <p><strong className="text-white">TECH:</strong> {project.output.story.tech}</p>
+                                                        </>
                                                     )}
-                                                </div>
-                                            </section>
-
-                                            {/* Architecture */}
-                                            <section>
-                                                <h3 className="text-lg font-bold text-secondary mb-2 flex items-center"><Code className="w-4 h-4 mr-2" /> ARCH_DIAGRAM</h3>
-                                                <div className="bg-black/50 p-4 rounded border border-white/10 overflow-x-auto">
-                                                    <MermaidChart chart={project.output.diagram} />
-                                                </div>
-                                            </section>
-
-                                            {/* Game Quests & Cheat Sheet Grid */}
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                <div className="bg-primary/5 p-4 rounded border border-primary/20">
-                                                    <h4 className="text-primary font-bold text-sm mb-3">QUEST_LOG (DEMO)</h4>
-                                                    <ul className="space-y-2">
-                                                        {project.output.game_quests.map((q, i) => (
-                                                            <li key={i} className="flex justify-between text-xs">
-                                                                <span>{q.title}</span>
-                                                                <span className="text-primary">+{q.xp}XP</span>
-                                                            </li>
-                                                        ))}
-                                                    </ul>
-                                                </div>
-                                                <div className="bg-secondary/5 p-4 rounded border border-secondary/20">
-                                                    <h4 className="text-secondary font-bold text-sm mb-3">CHEAT_SHEET</h4>
-                                                    <div className="space-y-2 text-xs">
-                                                        <p>INNOVATION_SCORE: {project.output.cheat_sheet.innovation_score}/100</p>
-                                                        <div className="flex flex-wrap gap-1">
-                                                            {project.output.cheat_sheet.tech_stack_array.map((tech, i) => (
-                                                                <span key={i} className="bg-white/10 px-1 rounded">{tech}</span>
-                                                            ))}
-                                                        </div>
-                                                    </div>
                                                 </div>
                                             </div>
 
-                                            {/* Scripts */}
-                                            <section>
-                                                <h3 className="text-lg font-bold text-secondary mb-2 flex items-center"><PlayCircle className="w-4 h-4 mr-2" /> DEMO_SCRIPT</h3>
-                                                <div className="bg-black p-4 rounded border border-white/10 font-mono text-xs space-y-2 max-h-60 overflow-y-auto">
-                                                    {project.output.demo_script.map((step, i) => (
-                                                        <div key={i} className="grid grid-cols-12 gap-2">
-                                                            <span className="col-span-2 text-primary">{step.time}</span>
-                                                            <span className="col-span-10">
-                                                                <span className="text-secondary uppercase">[{step.action}]</span> {step.script}
-                                                            </span>
-                                                        </div>
-                                                    ))}
+                                            {/* Diagram Card */}
+                                            <div className="bg-black/90 p-6 space-y-4 md:col-span-1 lg:col-span-1 border-r border-white/5">
+                                                <h3 className="text-secondary font-bold flex items-center gap-2"><Cpu className="w-4 h-4" /> ARCHITECTURE</h3>
+                                                <div className="h-48 overflow-hidden rounded border border-white/10 p-2 bg-[#0d1117]">
+                                                    <MermaidChart chart={project.output.diagram || "graph TD; A[Client] --> B[Server];"} />
                                                 </div>
-                                            </section>
+                                            </div>
+
+                                            {/* Quests Card */}
+                                            <div className="bg-black/90 p-6 space-y-4">
+                                                <h3 className="text-secondary font-bold flex items-center gap-2"><Target className="w-4 h-4" /> QUEST_LOG</h3>
+                                                <ul className="space-y-2">
+                                                    {(project.output.game_quests || []).map((q: any, i: number) => (
+                                                        <li key={i} className="flex justify-between items-center text-xs border border-white/5 p-2 rounded hover:bg-white/5 transition-colors cursor-pointer group">
+                                                            <span className="text-muted-foreground group-hover:text-white">{q.title}</span>
+                                                            <span className="text-primary font-mono">{q.xp}XP</span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
                                         </div>
                                     )}
 
+                                    {/* Loading State */}
                                     {project.status === "generating" && (
-                                        <div className="p-12 flex flex-col items-center justify-center text-primary space-y-4">
-                                            <Cpu className="w-12 h-12 animate-spin" />
-                                            <span className="animate-pulse">PROCESSING_DATA...</span>
-                                        </div>
-                                    )}
-
-                                    {project.status === "error" && (
-                                        <div className="p-4 text-destructive text-center">
-                                            SYSTEM_FAILURE: Generative process interrupted.
+                                        <div className="p-12 text-center space-y-4 relative overflow-hidden">
+                                            <div className="absolute inset-0 bg-[linear-gradient(45deg,transparent,rgba(57,255,20,0.1),transparent)] animate-[shimmer_2s_infinite]"></div>
+                                            <Cpu className="w-12 h-12 mx-auto text-primary animate-spin" />
+                                            <p className="text-xs font-mono text-primary animate-pulse">ANALYZING_CODEBASE_VECTORS...</p>
                                         </div>
                                     )}
                                 </motion.div>
                             ))}
                         </AnimatePresence>
-
-                        {projects.length === 0 && !loading && (
-                            <div className="text-center text-muted-foreground p-12 border border-dashed border-white/10 rounded-lg">
-                                NO_PROJECTS_DETECTED. INITIATE_FIRST_PROTOCOL.
-                            </div>
-                        )}
                     </div>
                 </div>
             </div>
 
+            {/* LIVE FEED SIDEBAR (Right) */}
+            <div className="w-[300px] hidden lg:block h-full border-l border-white/10 bg-black/80 backdrop-blur-md z-20">
+                <LiveFeed teamId={currentTeam?.id} />
+            </div>
+
+            {/* MODAL */}
             <TeamModal
                 isOpen={isTeamModalOpen}
                 onClose={() => setIsTeamModalOpen(false)}
                 userId={user?.uid || ""}
-                onTeamJoined={handleTeamJoined}
+                onTeamJoined={handleTeamCreated}
+            />
+
+            <OperativeModal
+                isOpen={!!selectedMember}
+                onClose={() => setSelectedMember(null)}
+                member={selectedMember}
             />
         </div>
     );
